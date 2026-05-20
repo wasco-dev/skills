@@ -2,48 +2,71 @@ package wasco-dev:petstore@1.0.0;
 
 /// Petstore API - A simple petstore API example
 interface petstore {
+    /// Error for endpoints that only require authentication (401, 429)
+    variant auth-error {
+        unauthorized(string),
+        too-many-requests(string),
+        unknown(string),
+    }
+
+    /// Error for endpoints that access a specific resource (401, 404, 422, 429)
+    variant resource-error {
+        unauthorized(string),
+        not-found(string),
+        validation(string),
+        too-many-requests(string),
+        unknown(string),
+    }
+
     /// GET /pets - List all pets
+    ///
+    /// # Parameters
+    /// - api-key: API key for authentication
     ///
     /// # Returns
     /// JSON array of pet objects: [{"id": "...", "name": "...", "tag": "..."}]
-    list-pets: func() -> string;
+    list-pets: func(api-key: string) -> result<string, auth-error>;
 
     /// GET /pets/{petId} - Get a pet by ID
     ///
     /// # Parameters
+    /// - api-key: API key for authentication
     /// - pet-id: Pet identifier
     ///
     /// # Returns
     /// JSON pet object: {"id": "...", "name": "...", "tag": "..."}
-    get-pet-by-id: func(pet-id: string) -> string;
+    get-pet-by-id: func(api-key: string, pet-id: string) -> result<string, resource-error>;
 
     /// POST /pets - Create a pet
     ///
     /// # Parameters
+    /// - api-key: API key for authentication
     /// - body: JSON pet object: {"name": "...", "tag": "..."}
     ///
     /// # Returns
     /// JSON pet object with ID: {"id": "...", "name": "...", "tag": "..."}
-    create-pet: func(body: string) -> string;
+    create-pet: func(api-key: string, body: string) -> result<string, resource-error>;
 
     /// PUT /pets/{petId} - Update a pet
     ///
     /// # Parameters
+    /// - api-key: API key for authentication
     /// - pet-id: Pet identifier
     /// - body: JSON pet object: {"name": "...", "tag": "..."}
     ///
     /// # Returns
     /// JSON updated pet object: {"id": "...", "name": "...", "tag": "..."}
-    update-pet: func(pet-id: string, body: string) -> string;
+    update-pet: func(api-key: string, pet-id: string, body: string) -> result<string, resource-error>;
 
     /// DELETE /pets/{petId} - Delete a pet
     ///
     /// # Parameters
+    /// - api-key: API key for authentication
     /// - pet-id: Pet identifier
     ///
     /// # Returns
     /// Empty string on success
-    delete-pet: func(pet-id: string) -> string;
+    delete-pet: func(api-key: string, pet-id: string) -> result<string, resource-error>;
 }
 
 world main {

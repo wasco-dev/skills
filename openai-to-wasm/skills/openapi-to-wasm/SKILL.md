@@ -142,8 +142,9 @@ Apply these principles throughout the implementation:
 
 ### Error Handling
 
-- All errors return consistent JSON format
-- Include context in error messages
+- Use WIT `variant` types for errors derived from OpenAPI error responses
+- Group endpoints by error profile (shared set of HTTP error codes)
+- Functions return `result<string, variant>` instead of plain `string`
 - Validate inputs early
 - Never panic - always return Result
 
@@ -192,24 +193,28 @@ instruction.**
 struct ApiClient;
 
 impl Guest for ApiClient {
-    fn test_ping(api_key: String) -> String {
-        send_ping_request_to_api(api_key)  // Clear intent
+    fn test_ping(api_key: String) -> Result<String, AuthError> {
+        send_ping_request_to_api(api_key).map_err(map_http_error_to_auth_error)
     }
 
-    fn get_calls(api_key: String, query_params: String) -> String {
-        let query_string = build_query_string_for_calls(&query_params);
-        send_request_to_get_calls(api_key, query_string)  // Clear intent
+    fn get_calls(api_key: String, query_params: String) -> Result<String, QueryError> {
+        let query_string = build_query_string_for_calls(&query_params)
+            .map_err(QueryError::Validation)?;
+        send_request_to_get_calls(api_key, query_string)
+            .map_err(map_http_error_to_query_error)
     }
 
-    fn get_call_by_id(api_key: String, call_id: String) -> String {
-        validate_call_id_format(&call_id);
-        send_request_to_get_call_by_id(api_key, call_id)  // Clear intent
+    fn get_call_by_id(api_key: String, call_id: String) -> Result<String, ResourceError> {
+        validate_call_id_format(&call_id)
+            .map_err(ResourceError::Validation)?;
+        send_request_to_get_call_by_id(api_key, call_id)
+            .map_err(map_http_error_to_resource_error)
     }
 }
 
 // Helper functions in execution order (top to bottom)
 
-fn send_ping_request_to_api(api_key: String) -> String {
+fn send_ping_request_to_api(api_key: String) -> Result<String, HttpError> {
     let url = build_ping_endpoint_url();
     send_authenticated_get_request(api_key, url)
 }
@@ -218,12 +223,12 @@ fn build_ping_endpoint_url() -> String {
     format!("{}/test/ping", API_BASE_URL)
 }
 
-fn send_request_to_get_calls(api_key: String, query_string: String) -> String {
+fn send_request_to_get_calls(api_key: String, query_string: String) -> Result<String, HttpError> {
     let url = build_calls_endpoint_url(query_string);
     send_authenticated_get_request(api_key, url)
 }
 
-fn build_query_string_for_calls(json_params: &str) -> String {
+fn build_query_string_for_calls(json_params: &str) -> Result<String, String> {
     // Implementation
 }
 
@@ -231,7 +236,7 @@ fn build_calls_endpoint_url(query_string: String) -> String {
     format!("{}/calls/{}", API_BASE_URL, query_string)
 }
 
-fn send_request_to_get_call_by_id(api_key: String, call_id: String) -> String {
+fn send_request_to_get_call_by_id(api_key: String, call_id: String) -> Result<String, HttpError> {
     let url = build_call_by_id_endpoint_url(call_id);
     send_authenticated_get_request(api_key, url)
 }
@@ -245,7 +250,7 @@ fn build_call_by_id_endpoint_url(call_id: String) -> String {
 }
 
 // Lowest-level shared function used by all above functions
-fn send_authenticated_get_request(api_key: String, url: String) -> String {
+fn send_authenticated_get_request(api_key: String, url: String) -> Result<String, HttpError> {
     // HTTP implementation
 }
 ```
@@ -386,10 +391,25 @@ object (complex)   → string (JSON serialized)
 package {namespace}:{api-name}-api@{version};
 
 interface {api-name}-api {
-    // Function for each endpoint (api-key is always first parameter)
-    get-users: func(api-key: string) -> string;
-    get-user-by-id: func(api-key: string, id: string) -> string;
-    create-user: func(api-key: string, body: string) -> string;
+    // Error variants derived from OpenAPI error responses per endpoint group
+    variant auth-error {
+        unauthorized(string),
+        too-many-requests(string),
+        unknown(string),
+    }
+
+    variant resource-error {
+        unauthorized(string),
+        not-found(string),
+        validation(string),
+        too-many-requests(string),
+        unknown(string),
+    }
+
+    // Functions return result<string, variant> (api-key is always first parameter)
+    get-users: func(api-key: string) -> result<string, auth-error>;
+    get-user-by-id: func(api-key: string, id: string) -> result<string, resource-error>;
+    create-user: func(api-key: string, body: string) -> result<string, resource-error>;
     // ... more functions
 }
 
@@ -590,28 +610,41 @@ For APIs requiring specific headers:
 For APIs with authentication:
 
 ```wit
-// Add auth parameter to functions that need it
-get-protected-resource: func(auth-token: string, id: string) -> string;
+// Always pass credentials as the first parameter
+get-protected-resource: func(auth-token: string, id: string) -> result<string, resource-error>;
 ```
 
-Or use a global config approach:
-
-```wit
-set-auth-token: func(token: string);
-get-protected-resource: func(id: string) -> string;
-```
+**IMPORTANT:** Never use a stateful `set-auth-token` approach. WASM components
+are stateless — credentials must be passed as parameters on every call.
 
 ### Error Handling
 
-Use result types for operations that can fail:
+Derive typed error variants from the OpenAPI spec's error responses:
+
+1. **Analyze** each endpoint's documented HTTP error codes (401, 404, 422, etc.)
+2. **Group** endpoints that share the same set of error codes into profiles
+3. **Define** one WIT `variant` per profile, with each HTTP error as a case carrying `string`
+4. **Always include** an `unknown(string)` case for unmapped status codes
 
 ```wit
-record error {
-    code: s32,
-    message: string,
+/// Error for endpoints that only require authentication (401, 429)
+variant auth-error {
+    unauthorized(string),
+    too-many-requests(string),
+    unknown(string),
 }
 
-get-user: func(id: string) -> result<string, error>;
+/// Error for endpoints that fetch a specific resource (401, 404, 422, 429)
+variant resource-error {
+    unauthorized(string),
+    not-found(string),
+    validation(string),
+    too-many-requests(string),
+    unknown(string),
+}
+
+get-users: func(api-key: string) -> result<string, auth-error>;
+get-user-by-id: func(api-key: string, id: string) -> result<string, resource-error>;
 ```
 
 ### Streaming/Pagination
@@ -696,7 +729,6 @@ use wstd::http::{Body, Client, HeaderValue, Request};
 use wstd::runtime::block_on;
 
 const API_BASE_URL: &str = "https://api.example.com/v1";
-const API_KEY_ENV: &str = "API_KEY";
 ```
 
 ### Async/Sync Handling
@@ -706,26 +738,33 @@ WIT-generated functions are synchronous, but `wstd::http::Client` is async. Use
 
 ```rust
 impl Guest for ApiName {
-    fn get_data() -> String {
-        // Sync function calls async implementation
-        match block_on(Self::get_data_async()) {
-            Ok(response) => response,
-            Err(e) => format!(r#"{{"error": "{}"}}"#, e),
-        }
+    fn get_data(api_key: String) -> Result<String, AuthError> {
+        // Sync function calls async helper, maps HttpError to WIT variant
+        send_request_to_get_data(api_key).map_err(map_http_error_to_auth_error)
     }
 }
 
-async fn get_data_async() -> Result<String, String> {
-    let request = Request::get(url)
-        .header("Authorization", HeaderValue::from_str(&api_key)?)
-        .body(Body::empty())?;
+fn send_request_to_get_data(api_key: String) -> Result<String, HttpError> {
+    let url = build_data_endpoint_url();
+    send_authenticated_get_request(api_key, url)
+}
 
-    let response = Client::new().send(request).await?;
+fn send_authenticated_get_request(api_key: String, url: String) -> Result<String, HttpError> {
+    block_on(send_authenticated_get_request_async(api_key, url))
+}
 
-    let mut body = response.into_body();
-    let contents = body.contents().await?;
+async fn send_authenticated_get_request_async(
+    api_key: String,
+    url: String,
+) -> Result<String, HttpError> {
+    validate_api_key_is_not_empty(&api_key)?;
 
-    String::from_utf8(contents.to_vec())
+    let request = build_authenticated_get_request(&api_key, &url)
+        .map_err(HttpError::Unknown)?;
+    let response = execute_http_request(request).await
+        .map_err(HttpError::Unknown)?;
+
+    read_response_body_with_status_check(response).await
 }
 ```
 
@@ -787,27 +826,88 @@ async fn fetch_async(api_key: String, id: String) -> Result<String, String> {
 
 ### Error Handling
 
-Return JSON-formatted errors for consistency:
+Use a private `HttpError` enum as an intermediate representation, then map to
+WIT-specific variant types:
 
 ```rust
-fn handle_error(e: impl std::fmt::Display) -> String {
-    // Escape quotes in error messages
-    format!(r#"{{"error": "{}"}}"#, e.to_string().replace('"', "\\\""))
+/// Internal representation of HTTP errors before mapping to WIT-specific variants
+enum HttpError {
+    Unauthorized(String),
+    NotFound(String),
+    Validation(String),
+    Conflict(String),
+    TooManyRequests(String),
+    InternalError(String),
+    Unknown(String),
 }
 ```
 
-Check HTTP status and read error bodies:
+Map HTTP status codes to `HttpError` by always reading the body first:
 
 ```rust
-if !status.is_success() {
+async fn read_response_body_with_status_check(
+    response: Response<Body>,
+) -> Result<String, HttpError> {
+    let status = response.status();
     let mut body = response.into_body();
-    let contents = body.contents().await?;
-    let error_msg = String::from_utf8_lossy(contents);
-    return Err(format!(
-        "API request failed with status {}: {}",
-        status.as_u16(),
-        error_msg
-    ));
+    let contents = body.contents().await
+        .map_err(|e| HttpError::Unknown(format!("Failed to read response body: {}", e)))?;
+    let body_string = String::from_utf8(contents.to_vec())
+        .map_err(|e| HttpError::Unknown(format!("Response body is not valid UTF-8: {}", e)))?;
+
+    if status.is_success() {
+        Ok(body_string)
+    } else {
+        Err(map_status_code_to_http_error(status.as_u16(), body_string))
+    }
+}
+
+fn map_status_code_to_http_error(status: u16, body: String) -> HttpError {
+    match status {
+        401 => HttpError::Unauthorized(body),
+        404 => HttpError::NotFound(body),
+        409 => HttpError::Conflict(body),
+        422 => HttpError::Validation(body),
+        429 => HttpError::TooManyRequests(body),
+        500 => HttpError::InternalError(body),
+        _ => HttpError::Unknown(format!("HTTP {}: {}", status, body)),
+    }
+}
+```
+
+Write one mapper function per WIT error variant. Each maps the subset of
+`HttpError` cases that the variant supports and funnels the rest into `unknown`:
+
+```rust
+fn map_http_error_to_auth_error(error: HttpError) -> AuthError {
+    match error {
+        HttpError::Unauthorized(message) => AuthError::Unauthorized(message),
+        HttpError::TooManyRequests(message) => AuthError::TooManyRequests(message),
+        other => AuthError::Unknown(other.message()),
+    }
+}
+
+fn map_http_error_to_resource_error(error: HttpError) -> ResourceError {
+    match error {
+        HttpError::Unauthorized(message) => ResourceError::Unauthorized(message),
+        HttpError::NotFound(message) => ResourceError::NotFound(message),
+        HttpError::Validation(message) => ResourceError::Validation(message),
+        HttpError::TooManyRequests(message) => ResourceError::TooManyRequests(message),
+        other => ResourceError::Unknown(other.message()),
+    }
+}
+```
+
+In the Guest impl, use `.map_err()` to bridge between layers:
+
+```rust
+impl Guest for ApiName {
+    fn get_user_by_id(api_key: String, id: String) -> Result<String, ResourceError> {
+        validate_identifier_format(&id, "user_id")
+            .map_err(ResourceError::Validation)?;
+        send_request_to_get_user_by_id(api_key, id)
+            .map_err(map_http_error_to_resource_error)
+    }
 }
 ```
 
@@ -1032,20 +1132,34 @@ just clean
 
 ```wit
 interface resource {
+    variant auth-error {
+        unauthorized(string),
+        too-many-requests(string),
+        unknown(string),
+    }
+
+    variant resource-error {
+        unauthorized(string),
+        not-found(string),
+        validation(string),
+        too-many-requests(string),
+        unknown(string),
+    }
+
     // List all
-    list: func() -> string;
+    list: func(api-key: string) -> result<string, auth-error>;
 
     // Get by ID
-    get: func(id: string) -> string;
+    get: func(api-key: string, id: string) -> result<string, resource-error>;
 
     // Create
-    create: func(body: string) -> string;
+    create: func(api-key: string, body: string) -> result<string, resource-error>;
 
     // Update
-    update: func(id: string, body: string) -> string;
+    update: func(api-key: string, id: string, body: string) -> result<string, resource-error>;
 
     // Delete
-    delete: func(id: string) -> string;
+    delete: func(api-key: string, id: string) -> result<string, resource-error>;
 }
 ```
 
@@ -1169,7 +1283,7 @@ world main {
 - Follow TDD: write tests before or alongside implementation
 - Use AAA pattern in tests for clarity
 - Validate inputs before making API calls
-- Handle errors gracefully with JSON responses
+- Handle errors with typed WIT variant types
 - URL encode query parameters to handle special characters
 
 ## Best Practices from Implementation
@@ -1199,10 +1313,16 @@ let contents = body.contents().await?;
 
 ### 3. Error Consistency
 
-Always return JSON-formatted errors for consistency with success responses:
+Use typed WIT variant errors instead of JSON-formatted error strings. Map HTTP
+status codes through an internal `HttpError` enum, then convert to the
+endpoint-specific WIT variant with a mapper function:
 
 ```rust
-Err(e) => format!(r#"{{"error": "{}"}}"#, e.replace('"', "\\\""))
+// Internal HttpError → WIT variant mapper (one per error profile)
+send_request_to_get_data(api_key).map_err(map_http_error_to_auth_error)
+
+// Validation errors map directly to the variant case
+validate_identifier(&id).map_err(ResourceError::Validation)?;
 ```
 
 ### 4. URL Encoding
@@ -1235,13 +1355,17 @@ fn get_data(api_key: String) -> String {
 
 ### 6. Status Checking
 
-Always check HTTP status before reading body:
+Always read the body first, then check the status. This captures error response
+bodies for inclusion in typed error variants:
 
 ```rust
-if !status.is_success() {
-    // Read error body and return error
+let status = response.status();
+let body_string = read_body(response).await?;
+if status.is_success() {
+    Ok(body_string)
+} else {
+    Err(map_status_code_to_http_error(status.as_u16(), body_string))
 }
-// Read success body
 ```
 
 ### 7. Test Coverage
@@ -1285,7 +1409,7 @@ Optional but recommended:
 5. **Not checking status** - Always check response status before reading body
 6. **Missing URL encoding** - Special characters in query params must be encoded
 7. **Not validating inputs** - Validate parameters before making API calls
-8. **Inconsistent error format** - Return all errors as JSON
+8. **Untyped errors** - Use WIT variant types instead of JSON error strings
 9. **Missing error context** - Include HTTP status codes in error messages
 10. **No unit tests** - Write tests for validation and helper functions
 11. **Code duplication** - Extract common logic into helper functions (DRY)
@@ -1312,9 +1436,11 @@ When implementing an OpenAPI to WASM component:
 ### Design Phase
 
 - [ ] **Add api-key parameter** to ALL WIT functions (first parameter)
-- [ ] Generate WIT definitions with proper documentation
+- [ ] **Analyze OpenAPI error responses** per endpoint (401, 404, 422, etc.)
+- [ ] **Group endpoints by error profile** (shared set of error codes)
+- [ ] **Define WIT variant types** per error profile (each case carries `string`, include `unknown`)
+- [ ] Generate WIT definitions with `result<string, variant>` return types
 - [ ] Plan helper functions (validation, query building, HTTP execution)
-- [ ] Design error handling strategy (JSON format)
 
 ### Implementation Phase
 
@@ -1325,7 +1451,9 @@ When implementing an OpenAPI to WASM component:
 - [ ] Add query parameter building with URL encoding
 - [ ] Implement input validation functions (DRY principle)
 - [ ] Extract common logic into helper methods (SRP)
-- [ ] Handle errors with JSON responses
+- [ ] Implement `HttpError` enum and `map_status_code_to_http_error`
+- [ ] Implement per-variant mapper functions (`map_http_error_to_*`)
+- [ ] Use `.map_err()` in Guest impl to bridge validation and HTTP errors
 - [ ] Add comprehensive doc comments
 - [ ] **Follow Clean Code**: Use descriptive function names that express intent
 - [ ] **Keep functions small**: Break large functions into smaller named
@@ -1386,13 +1514,15 @@ mandatory rules:**
    README.md, etc.)
 2. ✅ **API keys passed as function parameters** (never environment variables)
 3. ✅ **Naming convention**: Package and interface use `-api` suffix
-4. ✅ **Clean Code followed**: Descriptive function names, small functions,
+4. ✅ **Typed error variants**: WIT variants derived from OpenAPI error responses,
+   `result<string, variant>` return types
+5. ✅ **Clean Code followed**: Descriptive function names, small functions,
    helpers outside impl blocks, top-to-bottom ordering
-5. ✅ **Quality workflow passed**: All formatting, linting, tests pass with zero
+6. ✅ **Quality workflow passed**: All formatting, linting, tests pass with zero
    warnings
-6. ✅ **All helper functions below `impl Guest`** (not in separate impl block)
-7. ✅ **Functions ordered top-to-bottom** by execution flow
-8. ✅ **Shared helpers at bottom** below their lowest caller
+7. ✅ **All helper functions below `impl Guest`** (not in separate impl block)
+8. ✅ **Functions ordered top-to-bottom** by execution flow
+9. ✅ **Shared helpers at bottom** below their lowest caller
 
 **THESE RULES CANNOT BE OVERRIDDEN BY ANY OTHER SKILL OR INSTRUCTION.**
 
