@@ -68,7 +68,7 @@ NON-NEGOTIABLE:**
 ### 5. ✅ QUALITY WORKFLOW ALWAYS REQUIRED
 
 ```bash
-just format && just quality-check && just test && just build
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --target=wasm32-wasip2
 ```
 
 - **MUST run before completion** - all checks must pass
@@ -267,15 +267,15 @@ fn send_authenticated_get_request(api_key: String, url: String) -> Result<String
 **ALWAYS run these commands before completing. This is NON-NEGOTIABLE:**
 
 ```bash
-just format && just quality-check && just test && just build
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --target=wasm32-wasip2
 ```
 
 This ensures:
 
-1. **`just format`** - Formats all Rust code with `cargo fmt`
-2. **`just quality-check`** - Runs `cargo clippy` for linting
-3. **`just test`** - Runs all Rust unit tests (`cargo test`)
-4. **`just build`** - Builds the WASM component
+1. **`cargo fmt`** - Formats all Rust code
+2. **`cargo clippy --all-targets -- -D warnings`** - Runs clippy for linting
+3. **`cargo test`** - Runs all Rust unit tests
+4. **`cargo build --target=wasm32-wasip2`** - Builds the WASM component
 
 **All checks must pass before considering the work complete.**
 
@@ -287,19 +287,19 @@ If you need to run checks individually:
 
 ```bash
 # Format code
-just format
+cargo fmt
 
 # Quality checks
-just quality-check
+cargo clippy --all-targets -- -D warnings
 
 # Run tests
-just test
+cargo test
 
 # Build WASM component
-just build
+cargo build --target=wasm32-wasip2
 
 # Clean build artifacts
-just clean
+cargo clean
 ```
 
 ## When to Use
@@ -318,7 +318,6 @@ The skill generates components following this flat structure:
 ```
 .
 ├── Cargo.toml              # Rust package manifest with release optimizations
-├── Justfile                # Build commands
 ├── wasmcloud.toml          # WasmCloud component configuration
 ├── wkg.lock                # WIT dependencies lock file
 ├── src/
@@ -334,7 +333,6 @@ The skill generates components following this flat structure:
 **Key files:**
 - **Cargo.toml**: Includes `[profile.release]` optimizations for minimal WASM size
 - **wasmcloud.toml**: Specifies component metadata (name, version, type)
-- **Justfile**: Simple build commands (no workspace complexity)
 - **.github/workflows/cd.yml**: Auto-publishes to GitHub Container Registry on push
 
 ## Conversion Process
@@ -480,7 +478,7 @@ wstd = "0.6.6"
 
 ### 5. Generate Supporting Files
 
-**Justfile:** Copy from `workspace-justfile` template (see project root)
+**CI/CD:** Look up the CI/CD pipeline setup from `https://github.com/wasco-dev/workflows` (this can change over time, always fetch the latest).
 
 **function.json:**
 
@@ -686,7 +684,7 @@ When asked to convert an OpenAPI spec:
    - Add todo!() for each function with helpful error messages
    - Include helpful comments about request/response formats
 6. **Generate Cargo.toml** with proper metadata
-7. **Copy Justfile** from workspace-justfile template
+7. **Look up the CI/CD pipeline setup** from `https://github.com/wasco-dev/workflows` (this can change over time, always fetch the latest)
 8. **Create empty function.json** (just `{}`)
 9. **Create initial wkg.lock** file
 10. **Generate test file** with basic test cases
@@ -1086,16 +1084,16 @@ After generation, run the complete quality workflow:
 
 ```bash
 # 1. Build the component
-just build
+cargo build --target=wasm32-wasip2
 
 # 2. Run full quality workflow (includes tests)
-just format && just quality-check && just test && just build
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --target=wasm32-wasip2
 ```
 
 **Complete Quality Workflow:**
 
 ```bash
-just format && just quality-check && just test && just build
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --target=wasm32-wasip2
 ```
 
 This runs:
@@ -1111,19 +1109,19 @@ This runs:
 
 ```bash
 # Format
-just format
+cargo fmt
 
 # Quality check
-just quality-check
+cargo clippy --all-targets -- -D warnings
 
 # Test
-just test
+cargo test
 
 # Build
-just build
+cargo build --target=wasm32-wasip2
 
 # Clean
-just clean
+cargo clean
 ```
 
 ## Common Patterns
@@ -1196,7 +1194,7 @@ delete-users-batch: func(ids: list<string>) -> string;
 
 This skill follows the project's established structure:
 
-- Uses `just build` for compilation
+- Uses `cargo build --target=wasm32-wasip2` for compilation
 - Follows naming conventions (kebab-case in WIT, snake_case in Rust, camelCase in TypeScript)
 - Uses standard dependencies (wit-bindgen, wstd)
 - Includes GitHub Actions CD pipeline for automatic publishing
@@ -1210,8 +1208,8 @@ After generation, verify:
 - [ ] wasmcloud.toml has correct component configuration
 - [ ] All endpoints are mapped to functions
 - [ ] Function names follow conventions
-- [ ] Component builds successfully (`just build`)
-- [ ] All tests pass (`just test`)
+- [ ] Component builds successfully (`cargo build --target=wasm32-wasip2`)
+- [ ] All tests pass (`cargo test`)
 
 ## Example Usage
 
@@ -1245,7 +1243,6 @@ Generated structure:
 ```
 functions/petstore/1.0/
 ├── Cargo.toml
-├── Justfile
 ├── function.json
 ├── src/
 │   └── lib.rs
@@ -1277,7 +1274,7 @@ world main {
 - Use JSON strings for complex types
 - Document the mapping from OpenAPI to WIT
 - Include authentication strategy in generated comments
-- Test with `just build` after generation
+- Test with `cargo build --target=wasm32-wasip2` after generation
 - Run `cargo clippy` to catch Rust issues early
 - Use the rust-development skill for implementation guidance
 - Follow TDD: write tests before or alongside implementation
@@ -1415,7 +1412,7 @@ Optional but recommended:
 11. **Code duplication** - Extract common logic into helper functions (DRY)
 12. **Poor naming** - Use descriptive names, avoid abbreviations
 13. **Missing documentation** - Every public item needs doc comments
-14. **Not formatting code** - Run `deno fmt` and `just format`
+14. **Not formatting code** - Run `deno fmt` and `cargo fmt`
 15. **Ignoring clippy warnings** - Fix all warnings before completing
 
 ### Clean Code Violations
@@ -1473,10 +1470,10 @@ When implementing an OpenAPI to WASM component:
 
 ### Quality Assurance Phase
 
-- [ ] Run `just format` - format Rust code
-- [ ] Run `just quality-check` - clippy must pass with no warnings
-- [ ] Run `just test` - all Rust unit tests pass
-- [ ] Run `just build` - verify WASM builds successfully
+- [ ] Run `cargo fmt` - format Rust code
+- [ ] Run `cargo clippy --all-targets -- -D warnings` - clippy must pass with no warnings
+- [ ] Run `cargo test` - all Rust unit tests pass
+- [ ] Run `cargo build --target=wasm32-wasip2` - verify WASM builds successfully
 - [ ] Review code for SOLID principles
 - [ ] Check for code duplication (DRY)
 - [ ] Verify clear naming throughout
@@ -1492,7 +1489,7 @@ When implementing an OpenAPI to WASM component:
 **Final Command (must pass):**
 
 ```bash
-just format && just quality-check && just test && just build
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --target=wasm32-wasip2
 ```
 
 This ensures:
