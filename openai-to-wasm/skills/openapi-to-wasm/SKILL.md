@@ -194,21 +194,19 @@ struct ApiClient;
 
 impl Guest for ApiClient {
     fn test_ping(api_key: String) -> Result<String, AuthError> {
-        send_ping_request_to_api(api_key).map_err(map_http_error_to_auth_error)
+        Ok(send_ping_request_to_api(api_key)?)
     }
 
     fn get_calls(api_key: String, query_params: String) -> Result<String, QueryError> {
         let query_string = build_query_string_for_calls(&query_params)
             .map_err(QueryError::Validation)?;
-        send_request_to_get_calls(api_key, query_string)
-            .map_err(map_http_error_to_query_error)
+        Ok(send_request_to_get_calls(api_key, query_string)?)
     }
 
     fn get_call_by_id(api_key: String, call_id: String) -> Result<String, ResourceError> {
         validate_call_id_format(&call_id)
             .map_err(ResourceError::Validation)?;
-        send_request_to_get_call_by_id(api_key, call_id)
-            .map_err(map_http_error_to_resource_error)
+        Ok(send_request_to_get_call_by_id(api_key, call_id)?)
     }
 }
 
@@ -737,8 +735,8 @@ WIT-generated functions are synchronous, but `wstd::http::Client` is async. Use
 ```rust
 impl Guest for ApiName {
     fn get_data(api_key: String) -> Result<String, AuthError> {
-        // Sync function calls async helper, maps HttpError to WIT variant
-        send_request_to_get_data(api_key).map_err(map_http_error_to_auth_error)
+        // Sync function calls async helper, ? converts HttpError via From impl
+        Ok(send_request_to_get_data(api_key)?)
     }
 }
 
@@ -873,38 +871,43 @@ fn map_status_code_to_http_error(status: u16, body: String) -> HttpError {
 }
 ```
 
-Write one mapper function per WIT error variant. Each maps the subset of
-`HttpError` cases that the variant supports and funnels the rest into `unknown`:
+Implement `From<HttpError>` for each WIT error variant. Each maps the subset of
+`HttpError` cases that the variant supports and funnels the rest into `unknown`.
+This enables implicit conversion via `?` instead of explicit `.map_err()` calls:
 
 ```rust
-fn map_http_error_to_auth_error(error: HttpError) -> AuthError {
-    match error {
-        HttpError::Unauthorized(message) => AuthError::Unauthorized(message),
-        HttpError::TooManyRequests(message) => AuthError::TooManyRequests(message),
-        other => AuthError::Unknown(other.message()),
+impl From<HttpError> for AuthError {
+    fn from(error: HttpError) -> Self {
+        match error {
+            HttpError::Unauthorized(message) => AuthError::Unauthorized(message),
+            HttpError::TooManyRequests(message) => AuthError::TooManyRequests(message),
+            other => AuthError::Unknown(other.message()),
+        }
     }
 }
 
-fn map_http_error_to_resource_error(error: HttpError) -> ResourceError {
-    match error {
-        HttpError::Unauthorized(message) => ResourceError::Unauthorized(message),
-        HttpError::NotFound(message) => ResourceError::NotFound(message),
-        HttpError::Validation(message) => ResourceError::Validation(message),
-        HttpError::TooManyRequests(message) => ResourceError::TooManyRequests(message),
-        other => ResourceError::Unknown(other.message()),
+impl From<HttpError> for ResourceError {
+    fn from(error: HttpError) -> Self {
+        match error {
+            HttpError::Unauthorized(message) => ResourceError::Unauthorized(message),
+            HttpError::NotFound(message) => ResourceError::NotFound(message),
+            HttpError::Validation(message) => ResourceError::Validation(message),
+            HttpError::TooManyRequests(message) => ResourceError::TooManyRequests(message),
+            other => ResourceError::Unknown(other.message()),
+        }
     }
 }
 ```
 
-In the Guest impl, use `.map_err()` to bridge between layers:
+In the Guest impl, use `?` to propagate and convert `HttpError` automatically,
+and `.map_err()` only for validation errors that need wrapping:
 
 ```rust
 impl Guest for ApiName {
     fn get_user_by_id(api_key: String, id: String) -> Result<String, ResourceError> {
         validate_identifier_format(&id, "user_id")
             .map_err(ResourceError::Validation)?;
-        send_request_to_get_user_by_id(api_key, id)
-            .map_err(map_http_error_to_resource_error)
+        Ok(send_request_to_get_user_by_id(api_key, id)?)
     }
 }
 ```
@@ -1312,11 +1315,11 @@ let contents = body.contents().await?;
 
 Use typed WIT variant errors instead of JSON-formatted error strings. Map HTTP
 status codes through an internal `HttpError` enum, then convert to the
-endpoint-specific WIT variant with a mapper function:
+endpoint-specific WIT variant via `From` implementations:
 
 ```rust
-// Internal HttpError → WIT variant mapper (one per error profile)
-send_request_to_get_data(api_key).map_err(map_http_error_to_auth_error)
+// HttpError converts to WIT variant implicitly via From impl and ?
+Ok(send_request_to_get_data(api_key)?)
 
 // Validation errors map directly to the variant case
 validate_identifier(&id).map_err(ResourceError::Validation)?;
@@ -1449,8 +1452,8 @@ When implementing an OpenAPI to WASM component:
 - [ ] Implement input validation functions (DRY principle)
 - [ ] Extract common logic into helper methods (SRP)
 - [ ] Implement `HttpError` enum and `map_status_code_to_http_error`
-- [ ] Implement per-variant mapper functions (`map_http_error_to_*`)
-- [ ] Use `.map_err()` in Guest impl to bridge validation and HTTP errors
+- [ ] Implement `From<HttpError>` for each WIT error variant
+- [ ] Use `?` in Guest impl for automatic HttpError conversion, `.map_err()` only for validation errors
 - [ ] Add comprehensive doc comments
 - [ ] **Follow Clean Code**: Use descriptive function names that express intent
 - [ ] **Keep functions small**: Break large functions into smaller named
